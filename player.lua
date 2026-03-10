@@ -36,11 +36,11 @@ end
 
 function Player.update(dng)
 	-- turn
-	if keyp("left") or keyp("a") then
+	if keyp("left") or keyp("q") then
 		Player.dir = (Player.dir - 1) % 4
 		target_angle -= 0.25
 	end
-	if keyp("right") or keyp("d") then
+	if keyp("right") or keyp("e") then
 		Player.dir = (Player.dir + 1) % 4
 		target_angle += 0.25
 	end
@@ -49,7 +49,7 @@ function Player.update(dng)
 	if keyp("up") or keyp("w") then
 		local nx = Player.gx + dir_dx[Player.dir+1]
 		local ny = Player.gy + dir_dz[Player.dir+1]
-		if Dungeon.is_open(dng, nx, ny) then
+		if Dungeon.can_enter(dng, Player.gx, Player.gy, nx, ny) then
 			Player.gx = nx
 			Player.gy = ny
 			target_x = (Player.gx - 0.5) * CELL
@@ -62,7 +62,31 @@ function Player.update(dng)
 		local back = (Player.dir + 2) % 4
 		local nx = Player.gx + dir_dx[back+1]
 		local ny = Player.gy + dir_dz[back+1]
-		if Dungeon.is_open(dng, nx, ny) then
+		if Dungeon.can_enter(dng, Player.gx, Player.gy, nx, ny) then
+			Player.gx = nx
+			Player.gy = ny
+			target_x = (Player.gx - 0.5) * CELL
+			target_z = (Player.gy - 0.5) * CELL
+		end
+	end
+
+	-- strafe left/right
+	if keyp("a") then
+		local left = (Player.dir - 1) % 4
+		local nx = Player.gx + dir_dx[left+1]
+		local ny = Player.gy + dir_dz[left+1]
+		if Dungeon.can_enter(dng, Player.gx, Player.gy, nx, ny) then
+			Player.gx = nx
+			Player.gy = ny
+			target_x = (Player.gx - 0.5) * CELL
+			target_z = (Player.gy - 0.5) * CELL
+		end
+	end
+	if keyp("d") then
+		local right = (Player.dir + 1) % 4
+		local nx = Player.gx + dir_dx[right+1]
+		local ny = Player.gy + dir_dz[right+1]
+		if Dungeon.can_enter(dng, Player.gx, Player.gy, nx, ny) then
 			Player.gx = nx
 			Player.gy = ny
 			target_x = (Player.gx - 0.5) * CELL

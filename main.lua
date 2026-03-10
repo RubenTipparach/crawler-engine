@@ -2,6 +2,7 @@
 -- grid-based movement, textured walls via vectorized textri
 
 include("config.lua")
+include("profiler.lua")
 include("renderer.lua")
 include("dungeon.lua")
 include("dungeon_generator.lua")
@@ -82,6 +83,7 @@ function _init()
 
 	-- generate fog dither textures (bayer + floyd-steinberg)
 	generate_fog_textures()
+	Renderer.fog_ct = get_spr(Config.fog.spr)
 end
 
 local function draw_loading(step, total, label)

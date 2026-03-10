@@ -309,42 +309,55 @@ local function build_visibility(px, pz, ca, sa, map, dw, dh)
 	local gpx = px / CELL
 	local gpz = pz / CELL
 	local max_steps = RENDER_R * 3
-	local max_dist = Config.fog.stop / CELL  -- cull beyond fog stop distance
+	local max_dist = Config.fog.stop / CELL
+	local _flr = flr
+	local _abs = abs
+	local inv_rays = 2 / NUM_RAYS
+
+	-- pre-compute player grid cell (constant across all rays)
+	local pgx = _flr(gpx)
+	local pgz = _flr(gpz)
+
+	-- always mark player's own cell visible
+	local pmgx, pmgz = pgx + 1, pgz + 1
+	if pmgx >= 1 and pmgx <= dw and pmgz >= 1 and pmgz <= dh then
+		vis[pmgz * 65536 + pmgx] = true
+	end
 
 	for r = 0, NUM_RAYS do
-		local t = (r / NUM_RAYS) * 2 - 1
+		local t = r * inv_rays - 1
 		local rdx = fwd_x + rt_x * t
 		local rdz = fwd_z + rt_z * t
 
 		-- DDA setup
-		local gx = flr(gpx)
-		local gz = flr(gpz)
+		local gx = pgx
+		local gz = pgz
 		local sx = rdx >= 0 and 1 or -1
 		local sz = rdz >= 0 and 1 or -1
-		local idx = rdx ~= 0 and abs(1 / rdx) or 32000
-		local idz = rdz ~= 0 and abs(1 / rdz) or 32000
+		local idx = rdx ~= 0 and _abs(1 / rdx) or 32000
+		local idz = rdz ~= 0 and _abs(1 / rdz) or 32000
 		local tx = rdx >= 0 and (gx + 1 - gpx) * idx or (gpx - gx) * idx
 		local tz = rdz >= 0 and (gz + 1 - gpz) * idz or (gpz - gz) * idz
 
 		for _ = 1, max_steps do
-			local mgx = gx + 1  -- 1-based
+			local mgx = gx + 1
 			local mgz = gz + 1
 			if mgx < 1 or mgx > dw or mgz < 1 or mgz > dh then break end
-			if min(tx, tz) > max_dist then break end  -- beyond fog stop
 
+			local key = mgz * 65536 + mgx
 			if map[mgz][mgx] == 1 then
-				-- hit wall: mark it so its faces get rendered, then stop
-				vis[mgz * 65536 + mgx] = true
+				vis[key] = true
 				break
 			end
 
-			-- mark open cell as visible
-			vis[mgz * 65536 + mgx] = true
+			vis[key] = true
 
 			if tx < tz then
+				if tx > max_dist then break end
 				gx += sx
 				tx += idx
 			else
+				if tz > max_dist then break end
 				gz += sz
 				tz += idz
 			end
@@ -386,8 +399,11 @@ function DungeonView.draw(dng, player)
 	local dw, dh = dng.w, dng.h
 
 	-- build visibility from player position
+	profile(" visibility")
 	build_visibility(cam_x, cam_z, ca, sa, map, dw, dh)
+	profile(" visibility")
 
+	profile(" geometry")
 	for gy = gy0, gy1 do
 		local row = map[gy]
 		local z0 = (gy - 1) * CELL
@@ -520,6 +536,8 @@ function DungeonView.draw(dng, player)
 			end
 		end
 	end
+
+	profile(" geometry")
 
 	Renderer.flush_with_fog()
 

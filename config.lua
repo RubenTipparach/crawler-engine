@@ -23,8 +23,10 @@ Config.render = {
 
 Config.fog = {
 	spr = 8,              -- color table sprite (generated via coltab)
-	colors = {15, 14, 8,   3, 1}, -- draw colors per level (lightest to darkest)
-	start  = {2,  2,  3.5, 5, 7}, -- depth thresholds (more levels = smoother gradient)
+	-- colors = {15, 14, 8,   1, 1}, -- draw colors per level (lightest to darkest)
+	-- start  = {2,  2,  3, 4, 8}, -- depth thresholds (more levels = smoother gradient)
+	colors = {14, 10, 6,   3, 1}, -- draw colors per level (lightest to darkest)
+	start  = {1.5,  3,  3, 4.5, 5}, -- depth thresholds (more levels = smoother gradient)
 	density = {0.25, 0.25, 0.5, 0.75, 1.0}, -- fog coverage per level (0=clear, 1=solid)
 	dither = "floyd",     -- "bayer", "floyd", or "none"
 	stop   = 8,           -- max render distance

@@ -8,6 +8,8 @@ Renderer.cx, Renderer.cy = 240, 135
 Renderer.screen_h = 270
 Renderer.tri_count = 0
 Renderer.near = 0.1
+Renderer.fog_ct = nil  -- cached color table sprite, set after fog init
+Renderer.fog_enabled = true
 
 -- textri buffers (pre-allocated, reused)
 local scanlines = userdata("f64", 11, 270)
@@ -83,17 +85,31 @@ function Renderer.flush_with_fog()
 	local starts = fog.start    -- depth threshold per level (ascending)
 	local dither = fog.dither   -- "bayer", "floyd", or "none"
 	local textures = dither == "floyd" and fog.tex_floyd or fog.tex_bayer
+	local fog_on = Renderer.fog_enabled
 
 	-- sort all geometry back-to-front (descending depth)
+	profile(" sort")
 	if dl_n > 1 then
-		quicksort(draw_list, 1, dl_n)
+		radix_sort(draw_list, dl_n)
 	end
+	profile(" sort")
 
-	local ct = get_spr(fog.spr) -- color table sprite for tinting
+	local ct = Renderer.fog_ct -- color table sprite for tinting (cached at init)
 	local fov = Renderer.fov
 	local cy = Renderer.cy
 	local sw = Renderer.cx * 2 - 1  -- screen width
 	local sh = Renderer.screen_h - 1 -- screen height
+
+	if not fog_on then
+		-- no fog: just rasterize
+		profile(" raster")
+		for i = 1, dl_n do
+			Renderer.textri(draw_list[i].spr, draw_list[i])
+			Renderer.tri_count += 1
+		end
+		profile(" raster")
+		return
+	end
 
 	-- walk fog planes from farthest (n) to nearest (1).
 	-- fi tracks the next fog plane to insert.
@@ -102,6 +118,7 @@ function Renderer.flush_with_fog()
 	-- main loop: draw each tri in back-to-front order.
 	-- before each tri, check if any fog planes sit between
 	-- the previous tri's depth and this tri's depth.
+	profile(" raster+fog")
 	for i = 1, dl_n do
 		local d = draw_list[i].d
 
@@ -135,7 +152,6 @@ function Renderer.flush_with_fog()
 	end
 
 	-- any fog planes nearer than ALL geometry still need drawing.
-	-- (rare: only if fog thresholds are closer than the nearest tri)
 	while fi >= 1 do
 		local ht = fov / starts[fi]
 		local top = mid(0, cy - ht, sh)
@@ -155,6 +171,7 @@ function Renderer.flush_with_fog()
 
 		fi -= 1
 	end
+	profile(" raster+fog")
 end
 
 -- switch resolution (updates projection constants)
@@ -297,7 +314,8 @@ end
 
 local radix_buckets = {}
 local radix_tmp = {}
-for i=0,255 do radix_buckets[i] = 0 end
+local radix_offsets = {}
+for i=0,255 do radix_buckets[i] = 0 radix_offsets[i] = 0 end
 
 function radix_sort(t, n)
 	if n <= 1 then return end
@@ -319,15 +337,14 @@ function radix_sort(t, n)
 		radix_tmp[i]._rb = b
 	end
 
-	local offsets = {}
-	offsets[255] = 1
+	radix_offsets[255] = 1
 	for i=254,0,-1 do
-		offsets[i] = offsets[i+1] + radix_buckets[i+1]
+		radix_offsets[i] = radix_offsets[i+1] + radix_buckets[i+1]
 	end
 
 	for i=1,n do
 		local b = radix_tmp[i]._rb
-		t[offsets[b]] = radix_tmp[i]
-		offsets[b] += 1
+		t[radix_offsets[b]] = radix_tmp[i]
+		radix_offsets[b] += 1
 	end
 end

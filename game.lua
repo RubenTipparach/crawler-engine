@@ -9,6 +9,7 @@ Game.floor = 1
 Game.floors = {}     -- persisted dungeon data per floor
 Game.climb = nil     -- climb animation state
 Game.on_stairs = false -- suppress stair re-trigger after climb
+Game.profiler_on = false
 
 local CELL = Config.cell_size
 local CLIMB_MOVE_FRAMES = Config.climb.move_frames
@@ -80,7 +81,7 @@ function Game.start_climb(direction)
 
 	Game.climb = {
 		direction = direction,
-		phase = "move",
+		phase = "ease_out",
 		timer = 0,
 		start_x = Player.x,
 		start_z = Player.z,
@@ -97,30 +98,36 @@ function Game.update_climbing()
 	local c = Game.climb
 	c.timer += 1
 
-	local peak = c.direction == "up" and CLIMB_UP_Y or -CLIMB_DOWN_Y
-
-	if c.phase == "move" then
+	if c.phase == "ease_out" then
+		-- ease out: walk to stairs + camera offset on current floor
+		local peak_out = c.direction == "up" and CLIMB_UP_Y or -CLIMB_DOWN_Y
 		local t = c.timer / CLIMB_MOVE_FRAMES
 		if t >= 1 then
 			t = 1
+			-- teleport to new floor
 			if c.direction == "up" then
 				Game.go_up()
 			else
 				Game.go_down()
 			end
-			c.phase = "settle"
+			-- start ease_in: arrive from opposite direction
+			-- going up = arriving from below (negative Y), going down = arriving from above (positive Y)
+			local arrival_y = c.direction == "up" and -CLIMB_UP_Y or CLIMB_DOWN_Y
+			c.phase = "ease_in"
 			c.timer = 0
-			Player.y = peak
+			Player.y = arrival_y
+			c.arrival_y = arrival_y
 			return
 		end
 		-- smoothstep easing
 		local st = t * t * (3 - 2 * t)
 		Player.x = c.start_x + (c.end_x - c.start_x) * st
 		Player.z = c.start_z + (c.end_z - c.start_z) * st
-		Player.y = c.start_y + (peak - c.start_y) * st
+		Player.y = c.start_y + (peak_out - c.start_y) * st
 		Player.angle = c.start_angle + (c.end_angle - c.start_angle) * st
 
-	elseif c.phase == "settle" then
+	elseif c.phase == "ease_in" then
+		-- ease in: camera settles from arrival offset to normal on new floor
 		local t = c.timer / CLIMB_SETTLE_FRAMES
 		if t >= 1 then
 			Player.y = 0
@@ -130,11 +137,19 @@ function Game.update_climbing()
 			return
 		end
 		local st = t * t * (3 - 2 * t)
-		Player.y = peak * (1 - st)
+		Player.y = c.arrival_y * (1 - st)
 	end
 end
 
 function Game.update()
+	if keyp("p") then
+		Game.profiler_on = not Game.profiler_on
+		profile.enabled(Game.profiler_on)
+	end
+	if keyp("i") and UI.fog_mode == 0 then
+		Renderer.fog_enabled = not Renderer.fog_enabled
+	end
+
 	if Game.state == "menu" then
 		local choice = Menu.update()
 		if choice == 1 then
@@ -186,15 +201,21 @@ function Game.draw()
 		Menu.draw()
 
 	elseif Game.state == "dungeon" or Game.state == "climbing" then
+		profile("render")
 		DungeonView.draw(Game.dungeon, Player)
+		profile("render")
 		-- minimap (top-right corner)
+		profile(" minimap")
 		Dungeon.draw_minimap(Game.dungeon, Player.gx, Player.gy, 480-Game.dungeon.w*2-4, 4, 2, DungeonView.vis)
+		profile(" minimap")
 		-- hud
 		local res_names = {"full", "half", "quarter"}
 		local res = res_names[DungeonView.res_mode + 1]
 		print("cpu: "..tostr(flr(stat(1)*1000)/10).."%  tris: "..Renderer.tri_count.."  res: "..res, 2, 2, 7)
-		print("pos: "..Player.gx..","..Player.gy.."  floor: "..Game.floor.."  [m] res [f] fog [esc] menu", 2, 12, 7)
+		local fog_lbl = Renderer.fog_enabled and "on" or "off"
+		print("pos: "..Player.gx..","..Player.gy.."  floor: "..Game.floor.."  [m] res [f] fog [i] fog:"..fog_lbl.." [p] prof", 2, 12, 7)
 		UI.fog_tweak_draw()
+		profile.draw()
 
 	elseif Game.state == "benchmark" then
 		Benchmark.draw()
