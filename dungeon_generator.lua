@@ -77,12 +77,16 @@ function Dungeon.print_map(dng, px, py)
 end
 
 -- draw minimap
-function Dungeon.draw_minimap(dng, player_gx, player_gy, mx, my, scale)
+function Dungeon.draw_minimap(dng, player_gx, player_gy, mx, my, scale, vis)
 	for y=1,dng.h do
 		for x=1,dng.w do
+			local c = nil
 			if dng.map[y][x] == 1 then
+				c = (vis and vis[y * 65536 + x]) and 8 or 5
+			end
+			if c then
 				rectfill(mx+(x-1)*scale, my+(y-1)*scale,
-				         mx+x*scale-1, my+y*scale-1, 5)
+				         mx+x*scale-1, my+y*scale-1, c)
 			end
 		end
 	end

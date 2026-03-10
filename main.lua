@@ -1,6 +1,7 @@
 -- space_crawler - 3d dungeon crawler
 -- grid-based movement, textured walls via vectorized textri
 
+include("config.lua")
 include("renderer.lua")
 include("dungeon.lua")
 include("dungeon_generator.lua")
@@ -11,14 +12,6 @@ include("menu.lua")
 include("ui.lua")
 include("game.lua")
 
--- fog darkening: remap wall colors to darker variants per level
--- texture uses colors 5(dark gray), 6(light gray), 7(white), 12(blue)
-local fog_maps = {
-	{[5]=1, [6]=5, [7]=6, [12]=1},   -- level 1: slight
-	{[5]=0, [6]=1, [7]=5, [12]=0},   -- level 2: medium
-	{[5]=0, [6]=0, [7]=1, [12]=0},   -- level 3: heavy
-	{[5]=0, [6]=0, [7]=0, [12]=0},   -- level 4: blackout
-}
 
 function _init()
 	-- generate wall texture if sprite 0 is blank
@@ -47,19 +40,8 @@ function _init()
 		set_spr(0, tex)
 	end
 
-	-- generate darkened wall texture variants (sprites 1-4)
-	local base = get_spr(0)
-	for level=1,#fog_maps do
-		local dark_tex = userdata("u8", 16, 16)
-		local remap = fog_maps[level]
-		for py=0,15 do
-			for px=0,15 do
-				local c = base:get(px, py)
-				dark_tex:set(px, py, remap[c] or c)
-			end
-		end
-		set_spr(level, dark_tex)
-	end
+	-- spr 1 = floor, spr 2 = ceiling, spr 3 = column (hand-drawn in sprite editor)
+
 end
 
 function _update()

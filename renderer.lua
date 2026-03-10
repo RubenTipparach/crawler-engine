@@ -31,7 +31,7 @@ end
 
 function Renderer.submit_tri(
 	pax,pay,paw, pbx,pby,pbw, pcx,pcy,pcw,
-	su1,sv1, su2,sv2, su3,sv3, depth
+	su1,sv1, su2,sv2, su3,sv3, depth, base_spr
 )
 	dl_n += 1
 	local e = draw_list[dl_n]
@@ -43,6 +43,7 @@ function Renderer.submit_tri(
 	e.u2 = su2  e.v2 = sv2
 	e.u3 = su3  e.v3 = sv3
 	e.d = depth
+	e.spr = base_spr or 0
 end
 
 function Renderer.submit_quad(sa, sb, sc, sd, uvs_t1, uvs_t2, depth)
@@ -70,27 +71,61 @@ function Renderer.flush(use_radix)
 	end
 end
 
--- flush with distance-based fog using pre-darkened sprite textures
--- sprites 0=bright, 1..num_fog=progressively darker
-local FOG_START = 2
-local FOG_END = 10
+-- flush with depth-based fog overlays via color table
+-- fog planes at per-level depths, interleaved with scene tris (painter's algorithm)
+-- each plane darkens everything drawn so far; cumulative for farther geometry
+function Renderer.flush_with_fog()
+	local fog = Config.fog
+	local n = #fog.colors
+	local starts = fog.start
 
-function Renderer.flush_with_fog(num_fog)
 	if dl_n > 1 then
 		quicksort(draw_list, 1, dl_n)
 	end
-	for i=1,dl_n do
-		local e = draw_list[i]
-		-- pick sprite index based on depth
-		local spr_idx = 0
-		if e.d > FOG_START then
-			local t = (e.d - FOG_START) / (FOG_END - FOG_START)
-			if t > 1 then t = 1 end
-			spr_idx = flr(t * num_fog) + 1
-			if spr_idx > num_fog then spr_idx = num_fog end
+
+	local ct = get_spr(fog.spr)
+	local fov = Renderer.fov
+	local cy = Renderer.cy
+	local sw = Renderer.cx * 2 - 1
+	local sh = Renderer.screen_h - 1
+
+	local fi = n  -- start from farthest fog plane
+
+	for i = 1, dl_n do
+		local d = draw_list[i].d
+
+		-- insert fog overlays for thresholds we've passed
+		while fi >= 1 and d < starts[fi] do
+			local ht = fov / starts[fi]
+			local top = mid(0, cy - ht, sh)
+			local bot = mid(0, cy + ht, sh)
+
+			memmap(0x8000, ct)
+			poke(0x550b, 0x3f)
+			rectfill(0, top, sw, bot, fog.colors[fi])
+			unmap(ct)
+			poke(0x550b, 0x00)
+
+			fi -= 1
 		end
-		Renderer.textri(spr_idx, e)
+
+		Renderer.textri(draw_list[i].spr, draw_list[i])
 		Renderer.tri_count += 1
+	end
+
+	-- apply remaining fog overlays
+	while fi >= 1 do
+		local ht = fov / starts[fi]
+		local top = mid(0, cy - ht, sh)
+		local bot = mid(0, cy + ht, sh)
+
+		memmap(0x8000, ct)
+		poke(0x550b, 0x3f)
+		rectfill(0, top, sw, bot, fog.colors[fi])
+		unmap(ct)
+		poke(0x550b, 0x00)
+
+		fi -= 1
 	end
 end
 

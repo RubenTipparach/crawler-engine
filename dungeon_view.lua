@@ -58,7 +58,7 @@ end
 
 local function try_quad(
 	ax,ay,az, bx,by,bz, cx,cy,cz, dx,dy,dz,
-	cam_x,cam_y,cam_z, ca,sa, uv_a,uv_b,uv_c,uv_d
+	cam_x,cam_y,cam_z, ca,sa, uv_a,uv_b,uv_c,uv_d, base_spr
 )
 	-- inline view transforms (avoid function call overhead)
 	local dxa, dya, dza = ax-cam_x, ay-cam_y, az-cam_z
@@ -102,7 +102,7 @@ local function try_quad(
 			local vi, vi1 = clipped[i], clipped[i+1]
 			Renderer.submit_tri(
 				c1[6],c1[7],c1[8], vi[6],vi[7],vi[8], vi1[6],vi1[7],vi1[8],
-				c1[4],c1[5], vi[4],vi[5], vi1[4],vi1[5], depth
+				c1[4],c1[5], vi[4],vi[5], vi1[4],vi1[5], depth, base_spr
 			)
 		end
 		return
@@ -127,13 +127,14 @@ local function try_quad(
 	local depth = (va_z+vb_z+vc_z+vd_z)*0.25
 
 	Renderer.submit_tri(pax,pay,wa, pbx,pby,wb, pcx,pcy,wc,
-		uv_a[1],uv_a[2], uv_b[1],uv_b[2], uv_c[1],uv_c[2], depth)
+		uv_a[1],uv_a[2], uv_b[1],uv_b[2], uv_c[1],uv_c[2], depth, base_spr)
 	Renderer.submit_tri(pax,pay,wa, pcx,pcy,wc, pdx,pdy,wd,
-		uv_a[1],uv_a[2], uv_c[1],uv_c[2], uv_d[1],uv_d[2], depth)
+		uv_a[1],uv_a[2], uv_c[1],uv_c[2], uv_d[1],uv_d[2], depth, base_spr)
 end
 
 -- DDA raycast through grid, marking visible open cells
 local vis = {}
+DungeonView.vis = vis
 
 local function build_visibility(px, pz, ca, sa, map, dw, dh)
 	-- clear
@@ -226,45 +227,66 @@ function DungeonView.draw(dng, player)
 	local uv_c = {s, s}
 	local uv_d = {0, s}
 
+	-- pillar half-width + wall UVs (inset to meet columns)
+	local P = CELL / 8
+	local uv_p = P / CELL * s
+	local wall_a = {uv_p, 0}
+	local wall_b = {s - uv_p, 0}
+	local wall_c = {s - uv_p, s}
+	local wall_d = {uv_p, s}
+
 	for gy = gy0, gy1 do
 		local row = map[gy]
 		local z0 = (gy - 1) * CELL
 		local z1 = gy * CELL
 
 		for gx = gx0, gx1 do
-			if row[gx] == 1 and vis[gy * 65536 + gx] then
+			local key = gy * 65536 + gx
+			if not vis[key] then
+				-- not visible, skip
+			elseif row[gx] == 1 then
 				local x0 = (gx - 1) * CELL
 				local x1 = gx * CELL
 
-				-- south face: render if neighbor to south is open AND visible
+				-- south face (inset x by P for column fit)
 				if gy < dh and map[gy+1][gx] ~= 1 and vis[(gy+1) * 65536 + gx] then
-					try_quad(x0,y_hi,z1, x1,y_hi,z1, x1,y_lo,z1, x0,y_lo,z1,
-						cam_x,cam_y,cam_z, ca,sa, uv_a,uv_b,uv_c,uv_d)
+					try_quad(x0+P,y_hi,z1, x1-P,y_hi,z1, x1-P,y_lo,z1, x0+P,y_lo,z1,
+						cam_x,cam_y,cam_z, ca,sa, wall_a,wall_b,wall_c,wall_d)
 				end
 
-				-- north face
+				-- north face (inset x by P)
 				if gy > 1 and map[gy-1][gx] ~= 1 and vis[(gy-1) * 65536 + gx] then
-					try_quad(x1,y_hi,z0, x0,y_hi,z0, x0,y_lo,z0, x1,y_lo,z0,
-						cam_x,cam_y,cam_z, ca,sa, uv_a,uv_b,uv_c,uv_d)
+					try_quad(x1-P,y_hi,z0, x0+P,y_hi,z0, x0+P,y_lo,z0, x1-P,y_lo,z0,
+						cam_x,cam_y,cam_z, ca,sa, wall_a,wall_b,wall_c,wall_d)
 				end
 
-				-- east face
+				-- east face (inset z by P)
 				if gx < dw and row[gx+1] ~= 1 and vis[gy * 65536 + gx + 1] then
-					try_quad(x1,y_hi,z1, x1,y_hi,z0, x1,y_lo,z0, x1,y_lo,z1,
-						cam_x,cam_y,cam_z, ca,sa, uv_a,uv_b,uv_c,uv_d)
+					try_quad(x1,y_hi,z1-P, x1,y_hi,z0+P, x1,y_lo,z0+P, x1,y_lo,z1-P,
+						cam_x,cam_y,cam_z, ca,sa, wall_a,wall_b,wall_c,wall_d)
 				end
 
-				-- west face
+				-- west face (inset z by P)
 				if gx > 1 and row[gx-1] ~= 1 and vis[gy * 65536 + gx - 1] then
-					try_quad(x0,y_hi,z0, x0,y_hi,z1, x0,y_lo,z1, x0,y_lo,z0,
-						cam_x,cam_y,cam_z, ca,sa, uv_a,uv_b,uv_c,uv_d)
+					try_quad(x0,y_hi,z0+P, x0,y_hi,z1-P, x0,y_lo,z1-P, x0,y_lo,z0+P,
+						cam_x,cam_y,cam_z, ca,sa, wall_a,wall_b,wall_c,wall_d)
 				end
+			else
+				-- open cell: floor and ceiling
+				local x0 = (gx - 1) * CELL
+				local x1 = gx * CELL
+
+				-- floor (normal +Y, visible from above)
+				try_quad(x0,y_lo,z0, x1,y_lo,z0, x1,y_lo,z1, x0,y_lo,z1,
+					cam_x,cam_y,cam_z, ca,sa, uv_a,uv_b,uv_c,uv_d, 1)
+				-- ceiling (normal -Y, visible from below)
+				try_quad(x0,y_hi,z1, x1,y_hi,z1, x1,y_hi,z0, x0,y_hi,z0,
+					cam_x,cam_y,cam_z, ca,sa, uv_a,uv_b,uv_c,uv_d, 2)
 			end
 		end
 	end
 
 	-- pillars at grid intersections (wall corners bordering open space)
-	local P = CELL / 8  -- pillar half-width
 	local pil_s = 16  -- 1 tile width for narrow pillar face
 	local pil_a = {0, 0}
 	local pil_b = {pil_s, 0}
@@ -292,32 +314,55 @@ function DungeonView.draw(dng, player)
 				if nw_vis or ne_vis or sw_vis or se_vis then
 					local wx = (vx - 1) * CELL
 					local wz = (vy - 1) * CELL
-					local px0, px1 = wx - P, wx + P
-					local pz0, pz1 = wz - P, wz + P
 
-					-- only render faces facing open visible cells
-					if sw_vis or se_vis then -- south face
-						try_quad(px0,y_hi,pz1, px1,y_hi,pz1, px1,y_lo,pz1, px0,y_lo,pz1,
-							cam_x,cam_y,cam_z, ca,sa, pil_a,pil_b,pil_c,pil_d)
+					-- per-face rendering: each face protrudes P into open space
+					-- side faces act as steps connecting column to recessed wall
+
+					-- south face at z=wz+P
+					if sw_vis or se_vis then
+						local fx0 = sw_open and wx - P or wx
+						local fx1 = se_open and wx + P or wx
+						if fx0 < fx1 then
+							try_quad(fx0,y_hi,wz+P, fx1,y_hi,wz+P, fx1,y_lo,wz+P, fx0,y_lo,wz+P,
+								cam_x,cam_y,cam_z, ca,sa, pil_a,pil_b,pil_c,pil_d, 3)
+						end
 					end
-					if nw_vis or ne_vis then -- north face
-						try_quad(px1,y_hi,pz0, px0,y_hi,pz0, px0,y_lo,pz0, px1,y_lo,pz0,
-							cam_x,cam_y,cam_z, ca,sa, pil_a,pil_b,pil_c,pil_d)
+
+					-- north face at z=wz-P
+					if nw_vis or ne_vis then
+						local fx0 = nw_open and wx - P or wx
+						local fx1 = ne_open and wx + P or wx
+						if fx0 < fx1 then
+							try_quad(fx1,y_hi,wz-P, fx0,y_hi,wz-P, fx0,y_lo,wz-P, fx1,y_lo,wz-P,
+								cam_x,cam_y,cam_z, ca,sa, pil_a,pil_b,pil_c,pil_d, 3)
+						end
 					end
-					if ne_vis or se_vis then -- east face
-						try_quad(px1,y_hi,pz1, px1,y_hi,pz0, px1,y_lo,pz0, px1,y_lo,pz1,
-							cam_x,cam_y,cam_z, ca,sa, pil_a,pil_b,pil_c,pil_d)
+
+					-- east face at x=wx+P
+					if ne_vis or se_vis then
+						local fz0 = ne_open and wz - P or wz
+						local fz1 = se_open and wz + P or wz
+						if fz0 < fz1 then
+							try_quad(wx+P,y_hi,fz1, wx+P,y_hi,fz0, wx+P,y_lo,fz0, wx+P,y_lo,fz1,
+								cam_x,cam_y,cam_z, ca,sa, pil_a,pil_b,pil_c,pil_d, 3)
+						end
 					end
-					if nw_vis or sw_vis then -- west face
-						try_quad(px0,y_hi,pz0, px0,y_hi,pz1, px0,y_lo,pz1, px0,y_lo,pz0,
-							cam_x,cam_y,cam_z, ca,sa, pil_a,pil_b,pil_c,pil_d)
+
+					-- west face at x=wx-P
+					if nw_vis or sw_vis then
+						local fz0 = nw_open and wz - P or wz
+						local fz1 = sw_open and wz + P or wz
+						if fz0 < fz1 then
+							try_quad(wx-P,y_hi,fz0, wx-P,y_hi,fz1, wx-P,y_lo,fz1, wx-P,y_lo,fz0,
+								cam_x,cam_y,cam_z, ca,sa, pil_a,pil_b,pil_c,pil_d, 3)
+						end
 					end
 				end
 			end
 		end
 	end
 
-	Renderer.flush_with_fog(4)
+	Renderer.flush_with_fog()
 
 	if DungeonView.half_res then
 		set_draw_target()
