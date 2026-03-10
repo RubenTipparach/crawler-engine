@@ -1,64 +1,108 @@
 -- dungeon_generator.lua
--- Generates a 1/0 tile grid: 1=wall, 0=open
--- Uses recursive backtracker on logical cells, then expands to tile grid
+-- Room-based dungeon generator
+-- Each floor has randomly placed rooms connected by corridors
 
-function Dungeon.generate(mw, mh)
-	local w = mw * 2 + 1
-	local h = mh * 2 + 1
+local function carve_corridor(map, x1, y1, x2, y2)
+	-- L-shaped: horizontal then vertical
+	local sx = x2 >= x1 and 1 or -1
+	for x = x1, x2, sx do
+		map[y1][x] = 0
+	end
+	local sy = y2 >= y1 and 1 or -1
+	for y = y1, y2, sy do
+		map[y][x2] = 0
+	end
+end
+
+local function find_stairs_dir(map, gx, gy, w, h)
+	local sdirs = {{0,-1,0},{1,0,1},{0,1,2},{-1,0,3}}
+	for _, sd in ipairs(sdirs) do
+		local nx, ny = gx + sd[1], gy + sd[2]
+		if nx >= 1 and nx <= w and ny >= 1 and ny <= h and map[ny][nx] == 0 then
+			return (sd[3] + 2) % 4
+		end
+	end
+	return 2
+end
+
+function Dungeon.generate(w, h, has_down_stairs)
+	local dng = {}
 	local map = {}
 
-	-- fill all with walls
-	for y=1,h do
+	for y = 1, h do
 		map[y] = {}
-		for x=1,w do
+		for x = 1, w do
 			map[y][x] = 1
 		end
 	end
 
-	-- recursive backtracker
-	-- logical cells are at grid positions (cx*2, cy*2)
-	-- walls between cells are at odd grid positions
-	local visited = {}
-	local stack = {}
-	local cx, cy = 1, 1
-	map[cy*2][cx*2] = 0
-	visited[cy*256+cx] = true
-	local count = 1
-	local total = mw * mh
-	local dirs = {{0,-1},{1,0},{0,1},{-1,0}}
+	-- place rooms (allow overlap for tower-like variety)
+	local rooms = {}
+	local num_rooms = 5 + flr(rnd(4)) -- 5-8
 
-	while count < total do
-		local nbrs = {}
-		for _,d in ipairs(dirs) do
-			local nx, ny = cx+d[1], cy+d[2]
-			if nx>=1 and nx<=mw and ny>=1 and ny<=mh and not visited[ny*256+nx] then
-				nbrs[#nbrs+1] = d
+	for _ = 1, num_rooms do
+		local rw = 2 + flr(rnd(3)) -- 2-4
+		local rh = 2 + flr(rnd(3))
+		local rx = 2 + flr(rnd(w - rw - 2))
+		local ry = 2 + flr(rnd(h - rh - 2))
+
+		rooms[#rooms + 1] = {
+			x = rx, y = ry, w = rw, h = rh,
+			cx = rx + flr(rw / 2),
+			cy = ry + flr(rh / 2)
+		}
+		for py = ry, ry + rh - 1 do
+			for px = rx, rx + rw - 1 do
+				map[py][px] = 0
 			end
-		end
-		if #nbrs > 0 then
-			local d = nbrs[flr(rnd(#nbrs))+1]
-			stack[#stack+1] = {cx,cy}
-			-- carve passage wall between cells
-			map[cy*2+d[2]][cx*2+d[1]] = 0
-			cx += d[1]
-			cy += d[2]
-			-- carve destination cell
-			map[cy*2][cx*2] = 0
-			visited[cy*256+cx] = true
-			count += 1
-		else
-			local p = stack[#stack]
-			stack[#stack] = nil
-			cx, cy = p[1], p[2]
 		end
 	end
 
-	Dungeon.map = map
-	Dungeon.w = w
-	Dungeon.h = h
-	Dungeon.mw = mw
-	Dungeon.mh = mh
-	return Dungeon
+	-- connect rooms sequentially
+	for i = 2, #rooms do
+		carve_corridor(map, rooms[i-1].cx, rooms[i-1].cy,
+		               rooms[i].cx, rooms[i].cy)
+	end
+	-- extra corridor for loops
+	if #rooms > 2 then
+		carve_corridor(map, rooms[1].cx, rooms[1].cy,
+		               rooms[#rooms].cx, rooms[#rooms].cy)
+	end
+
+	-- start room = room 1
+	local start_room = rooms[1]
+	dng.spawn_gx = start_room.cx
+	dng.spawn_gy = start_room.cy
+
+	-- place up-stairs in farthest room from room 1
+	local best_idx = #rooms
+	local best_dist = 0
+	for i = 2, #rooms do
+		local r = rooms[i]
+		local dist = abs(r.cx - start_room.cx) + abs(r.cy - start_room.cy)
+		if dist > best_dist then
+			best_dist = dist
+			best_idx = i
+		end
+	end
+	local stairs_room = rooms[best_idx]
+
+	dng.stairs_gx = stairs_room.cx
+	dng.stairs_gy = stairs_room.cy
+	dng.stairs_dir = find_stairs_dir(map, dng.stairs_gx, dng.stairs_gy, w, h)
+
+	-- down-stairs (return to previous floor)
+	if has_down_stairs then
+		dng.down_gx = start_room.cx
+		dng.down_gy = start_room.cy
+		dng.down_dir = find_stairs_dir(map, dng.down_gx, dng.down_gy, w, h)
+	end
+
+	dng.map = map
+	dng.w = w
+	dng.h = h
+
+	return dng
 end
 
 -- print the map as text (for debugging)
@@ -89,6 +133,16 @@ function Dungeon.draw_minimap(dng, player_gx, player_gy, mx, my, scale, vis)
 				         mx+x*scale-1, my+y*scale-1, c)
 			end
 		end
+	end
+	-- up-stairs marker (green)
+	local sx, sy = dng.stairs_gx, dng.stairs_gy
+	rectfill(mx+(sx-1)*scale, my+(sy-1)*scale,
+	         mx+sx*scale-1, my+sy*scale-1, 10)
+	-- down-stairs marker (red)
+	if dng.down_gx then
+		local dx, dy = dng.down_gx, dng.down_gy
+		rectfill(mx+(dx-1)*scale, my+(dy-1)*scale,
+		         mx+dx*scale-1, my+dy*scale-1, 8)
 	end
 	-- player dot
 	rectfill(mx+(player_gx-1)*scale, my+(player_gy-1)*scale,

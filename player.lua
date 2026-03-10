@@ -8,12 +8,12 @@ Player.dir = 2  -- 0=N,1=E,2=S,3=W (start facing south)
 
 -- smooth visual state
 Player.x, Player.z = 0, 0
+Player.y = 0  -- vertical offset (used during stair climb)
 Player.angle = 0
 local target_x, target_z = 0, 0
 local target_angle = 0
 
-local CELL = 2
-local LERP_SPEED = 0.15
+local CELL = Config.cell_size
 
 -- direction vectors: N, E, S, W
 local dir_dx = {0, 1, 0, -1}
@@ -26,6 +26,7 @@ function Player.init(gx, gy, dir)
 	Player.dir = dir or 2
 	Player.x = (gx - 0.5) * CELL
 	Player.z = (gy - 0.5) * CELL
+	Player.y = 0
 	target_x = Player.x
 	target_z = Player.z
 	-- angle: dir 0(N)=0, 1(E)=0.25, 2(S)=0.5, 3(W)=0.75
@@ -70,7 +71,7 @@ function Player.update(dng)
 	end
 
 	-- lerp
-	Player.x += (target_x - Player.x) * LERP_SPEED
-	Player.z += (target_z - Player.z) * LERP_SPEED
-	Player.angle += (target_angle - Player.angle) * LERP_SPEED
+	Player.x += (target_x - Player.x) * Config.move_smoothing
+	Player.z += (target_z - Player.z) * Config.move_smoothing
+	Player.angle += (target_angle - Player.angle) * Config.turn_smoothing
 end

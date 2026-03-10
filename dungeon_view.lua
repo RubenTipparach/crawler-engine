@@ -3,16 +3,24 @@
 
 DungeonView = {}
 
-local CELL = 2
+local CELL = Config.cell_size
 local HALF = CELL / 2
-local RENDER_R = 7
-local NEAR = 0.1
-local NUM_RAYS = 120
+local RENDER_R = Config.render.radius
+local NEAR = Config.render.near
+local NUM_RAYS = Config.render.num_rays
 
--- half-res render target
-local HALF_W, HALF_H = 240, 135
-local half_buf = userdata("u8", HALF_W, HALF_H)
-DungeonView.half_res = true  -- toggle with M key
+-- resolution modes: 0=full(480x270), 1=half(240x135), 2=quarter(120x67)
+local RES_MODES = {
+	{240, 135},  -- half
+	{120, 67},   -- quarter
+}
+local res_bufs = {}
+for i = 1, #RES_MODES do
+	res_bufs[i] = userdata("u8", RES_MODES[i][1], RES_MODES[i][2])
+end
+DungeonView.res_mode = 1  -- 0=full, 1=half, 2=quarter
+-- keep half_res for backwards compat in HUD
+DungeonView.half_res = true
 
 -- pre-allocated clip buffers (zero per-frame allocations)
 local _cv = {}
@@ -21,6 +29,26 @@ for i=1,8 do
 	_cv[i] = {0,0,0,0,0,0,0,0}
 	_co[i] = {0,0,0,0,0,0,0,0}
 end
+
+-- pre-allocated UV tables (constant, reused every frame)
+local UV_S = 64
+local uv_a = {0, 0}
+local uv_b = {UV_S, 0}
+local uv_c = {UV_S, UV_S}
+local uv_d = {0, UV_S}
+
+local P = CELL / 8
+local uv_p = P / CELL * UV_S
+local wall_a = {uv_p, 0}
+local wall_b = {UV_S - uv_p, 0}
+local wall_c = {UV_S - uv_p, UV_S}
+local wall_d = {uv_p, UV_S}
+
+local pil_s = 16
+local pil_a = {0, 0}
+local pil_b = {pil_s, 0}
+local pil_c = {pil_s, UV_S}
+local pil_d = {0, UV_S}
 
 -- Sutherland-Hodgman clip polygon against near plane
 local function clip_near(verts, n)
@@ -132,6 +160,139 @@ local function try_quad(
 		uv_a[1],uv_a[2], uv_c[1],uv_c[2], uv_d[1],uv_d[2], depth, base_spr)
 end
 
+-- stairs geometry: 10 flat-shaded steps with dithered risers
+local NUM_STEPS = 10
+
+local function render_stairs(x0, x1, z0, z1, y_lo, y_hi, dir, cam_x, cam_y, cam_z, ca, sa, uv_a, uv_b, uv_c, uv_d, going_down)
+	local y_range = y_hi - y_lo
+	local step_h = y_range / NUM_STEPS
+	local step_d = CELL / NUM_STEPS
+
+	for i = 0, NUM_STEPS - 1 do
+		local tread_y, riser_top, riser_bot
+		if going_down then
+			tread_y = y_lo - (i + 1) * step_h
+			riser_top = y_lo - i * step_h
+			riser_bot = tread_y
+		else
+			tread_y = y_lo + (i + 1) * step_h
+			riser_top = tread_y
+			riser_bot = y_lo + i * step_h
+		end
+
+		if dir == 0 then -- north (-z), entrance from south
+			local sz0 = z1 - (i + 1) * step_d
+			local sz1 = z1 - i * step_d
+			try_quad(x0,tread_y,sz0, x1,tread_y,sz0, x1,tread_y,sz1, x0,tread_y,sz1,
+				cam_x,cam_y,cam_z, ca,sa, uv_a,uv_b,uv_c,uv_d, 4)
+			try_quad(x0,riser_top,sz1, x1,riser_top,sz1, x1,riser_bot,sz1, x0,riser_bot,sz1,
+				cam_x,cam_y,cam_z, ca,sa, uv_a,uv_b,uv_c,uv_d, 5)
+
+		elseif dir == 1 then -- east (+x), entrance from west
+			local sx0 = x0 + i * step_d
+			local sx1 = x0 + (i + 1) * step_d
+			try_quad(sx0,tread_y,z0, sx1,tread_y,z0, sx1,tread_y,z1, sx0,tread_y,z1,
+				cam_x,cam_y,cam_z, ca,sa, uv_a,uv_b,uv_c,uv_d, 4)
+			try_quad(sx0,riser_top,z0, sx0,riser_top,z1, sx0,riser_bot,z1, sx0,riser_bot,z0,
+				cam_x,cam_y,cam_z, ca,sa, uv_a,uv_b,uv_c,uv_d, 5)
+
+		elseif dir == 2 then -- south (+z), entrance from north
+			local sz0 = z0 + i * step_d
+			local sz1 = z0 + (i + 1) * step_d
+			try_quad(x0,tread_y,sz0, x1,tread_y,sz0, x1,tread_y,sz1, x0,tread_y,sz1,
+				cam_x,cam_y,cam_z, ca,sa, uv_a,uv_b,uv_c,uv_d, 4)
+			try_quad(x1,riser_top,sz0, x0,riser_top,sz0, x0,riser_bot,sz0, x1,riser_bot,sz0,
+				cam_x,cam_y,cam_z, ca,sa, uv_a,uv_b,uv_c,uv_d, 5)
+
+		elseif dir == 3 then -- west (-x), entrance from east
+			local sx0 = x1 - (i + 1) * step_d
+			local sx1 = x1 - i * step_d
+			try_quad(sx0,tread_y,z0, sx1,tread_y,z0, sx1,tread_y,z1, sx0,tread_y,z1,
+				cam_x,cam_y,cam_z, ca,sa, uv_a,uv_b,uv_c,uv_d, 4)
+			try_quad(sx1,riser_top,z1, sx1,riser_top,z0, sx1,riser_bot,z0, sx1,riser_bot,z1,
+				cam_x,cam_y,cam_z, ca,sa, uv_a,uv_b,uv_c,uv_d, 5)
+		end
+	end
+
+	-- stair-stepped side walls + back wall only for up-stairs
+	if going_down then return end
+
+	for i = 0, NUM_STEPS - 1 do
+		local tread_y_i
+		if going_down then
+			tread_y_i = y_lo - (i + 1) * step_h
+		else
+			tread_y_i = y_lo + (i + 1) * step_h
+		end
+
+		local side_top = going_down and y_lo or tread_y_i
+		local side_bot = going_down and tread_y_i or y_lo
+
+		if dir == 0 then
+			local sz0 = z1 - (i + 1) * step_d
+			local sz1 = z1 - i * step_d
+			-- west side (facing west, outward)
+			try_quad(x0,side_top,sz0, x0,side_top,sz1, x0,side_bot,sz1, x0,side_bot,sz0,
+				cam_x,cam_y,cam_z, ca,sa, uv_a,uv_b,uv_c,uv_d, 5)
+			-- east side (facing east, outward)
+			try_quad(x1,side_top,sz1, x1,side_top,sz0, x1,side_bot,sz0, x1,side_bot,sz1,
+				cam_x,cam_y,cam_z, ca,sa, uv_a,uv_b,uv_c,uv_d, 5)
+
+		elseif dir == 1 then
+			local sx0 = x0 + i * step_d
+			local sx1 = x0 + (i + 1) * step_d
+			-- north side (facing north, outward)
+			try_quad(sx1,side_top,z0, sx0,side_top,z0, sx0,side_bot,z0, sx1,side_bot,z0,
+				cam_x,cam_y,cam_z, ca,sa, uv_a,uv_b,uv_c,uv_d, 5)
+			-- south side (facing south, outward)
+			try_quad(sx0,side_top,z1, sx1,side_top,z1, sx1,side_bot,z1, sx0,side_bot,z1,
+				cam_x,cam_y,cam_z, ca,sa, uv_a,uv_b,uv_c,uv_d, 5)
+
+		elseif dir == 2 then
+			local sz0 = z0 + i * step_d
+			local sz1 = z0 + (i + 1) * step_d
+			-- west side (facing west, outward)
+			try_quad(x0,side_top,sz0, x0,side_top,sz1, x0,side_bot,sz1, x0,side_bot,sz0,
+				cam_x,cam_y,cam_z, ca,sa, uv_a,uv_b,uv_c,uv_d, 5)
+			-- east side (facing east, outward)
+			try_quad(x1,side_top,sz1, x1,side_top,sz0, x1,side_bot,sz0, x1,side_bot,sz1,
+				cam_x,cam_y,cam_z, ca,sa, uv_a,uv_b,uv_c,uv_d, 5)
+
+		elseif dir == 3 then
+			local sx0 = x1 - (i + 1) * step_d
+			local sx1 = x1 - i * step_d
+			-- north side (facing north, outward)
+			try_quad(sx1,side_top,z0, sx0,side_top,z0, sx0,side_bot,z0, sx1,side_bot,z0,
+				cam_x,cam_y,cam_z, ca,sa, uv_a,uv_b,uv_c,uv_d, 5)
+			-- south side (facing south, outward)
+			try_quad(sx0,side_top,z1, sx1,side_top,z1, sx1,side_bot,z1, sx0,side_bot,z1,
+				cam_x,cam_y,cam_z, ca,sa, uv_a,uv_b,uv_c,uv_d, 5)
+		end
+	end
+
+	-- back wall (flat shaded, facing outward from stairs)
+	local y_bot = going_down and (y_lo - y_range) or y_lo
+	local y_top = y_hi
+
+	if dir == 0 then
+		-- north end, facing north
+		try_quad(x1,y_top,z0, x0,y_top,z0, x0,y_bot,z0, x1,y_bot,z0,
+			cam_x,cam_y,cam_z, ca,sa, uv_a,uv_b,uv_c,uv_d, 5)
+	elseif dir == 1 then
+		-- east end, facing east
+		try_quad(x1,y_top,z1, x1,y_top,z0, x1,y_bot,z0, x1,y_bot,z1,
+			cam_x,cam_y,cam_z, ca,sa, uv_a,uv_b,uv_c,uv_d, 5)
+	elseif dir == 2 then
+		-- south end, facing south
+		try_quad(x0,y_top,z1, x1,y_top,z1, x1,y_bot,z1, x0,y_bot,z1,
+			cam_x,cam_y,cam_z, ca,sa, uv_a,uv_b,uv_c,uv_d, 5)
+	elseif dir == 3 then
+		-- west end, facing west
+		try_quad(x0,y_top,z0, x0,y_top,z1, x0,y_bot,z1, x0,y_bot,z0,
+			cam_x,cam_y,cam_z, ca,sa, uv_a,uv_b,uv_c,uv_d, 5)
+	end
+end
+
 -- DDA raycast through grid, marking visible open cells
 local vis = {}
 DungeonView.vis = vis
@@ -148,6 +309,7 @@ local function build_visibility(px, pz, ca, sa, map, dw, dh)
 	local gpx = px / CELL
 	local gpz = pz / CELL
 	local max_steps = RENDER_R * 3
+	local max_dist = Config.fog.stop / CELL  -- cull beyond fog stop distance
 
 	for r = 0, NUM_RAYS do
 		local t = (r / NUM_RAYS) * 2 - 1
@@ -168,6 +330,7 @@ local function build_visibility(px, pz, ca, sa, map, dw, dh)
 			local mgx = gx + 1  -- 1-based
 			local mgz = gz + 1
 			if mgx < 1 or mgx > dw or mgz < 1 or mgz > dh then break end
+			if min(tx, tz) > max_dist then break end  -- beyond fog stop
 
 			if map[mgz][mgx] == 1 then
 				-- hit wall: mark it so its faces get rendered, then stop
@@ -190,11 +353,16 @@ local function build_visibility(px, pz, ca, sa, map, dw, dh)
 end
 
 function DungeonView.draw(dng, player)
-	if keyp("m") then DungeonView.half_res = not DungeonView.half_res end
+	if keyp("m") then
+		DungeonView.res_mode = (DungeonView.res_mode + 1) % 3
+		DungeonView.half_res = DungeonView.res_mode > 0
+	end
 
-	if DungeonView.half_res then
-		Renderer.set_resolution(HALF_W, HALF_H)
-		set_draw_target(half_buf)
+	local rm = DungeonView.res_mode
+	if rm > 0 then
+		local rw, rh = RES_MODES[rm][1], RES_MODES[rm][2]
+		Renderer.set_resolution(rw, rh)
+		set_draw_target(res_bufs[rm])
 	else
 		Renderer.set_resolution(480, 270)
 	end
@@ -202,7 +370,7 @@ function DungeonView.draw(dng, player)
 	Renderer.begin_frame()
 
 	local cam_x = player.x
-	local cam_y = 0
+	local cam_y = player.y or 0
 	local cam_z = player.z
 	local ca = cos(player.angle)
 	local sa = sin(player.angle)
@@ -219,21 +387,6 @@ function DungeonView.draw(dng, player)
 
 	-- build visibility from player position
 	build_visibility(cam_x, cam_z, ca, sa, map, dw, dh)
-
-	-- quad corner UVs
-	local s = 64
-	local uv_a = {0, 0}
-	local uv_b = {s, 0}
-	local uv_c = {s, s}
-	local uv_d = {0, s}
-
-	-- pillar half-width + wall UVs (inset to meet columns)
-	local P = CELL / 8
-	local uv_p = P / CELL * s
-	local wall_a = {uv_p, 0}
-	local wall_b = {s - uv_p, 0}
-	local wall_c = {s - uv_p, s}
-	local wall_d = {uv_p, s}
 
 	for gy = gy0, gy1 do
 		local row = map[gy]
@@ -272,27 +425,33 @@ function DungeonView.draw(dng, player)
 						cam_x,cam_y,cam_z, ca,sa, wall_a,wall_b,wall_c,wall_d)
 				end
 			else
-				-- open cell: floor and ceiling
+				-- open cell
 				local x0 = (gx - 1) * CELL
 				local x1 = gx * CELL
 
-				-- floor (normal +Y, visible from above)
-				try_quad(x0,y_lo,z0, x1,y_lo,z0, x1,y_lo,z1, x0,y_lo,z1,
-					cam_x,cam_y,cam_z, ca,sa, uv_a,uv_b,uv_c,uv_d, 1)
-				-- ceiling (normal -Y, visible from below)
-				try_quad(x0,y_hi,z1, x1,y_hi,z1, x1,y_hi,z0, x0,y_hi,z0,
-					cam_x,cam_y,cam_z, ca,sa, uv_a,uv_b,uv_c,uv_d, 2)
+				if gx == dng.stairs_gx and gy == dng.stairs_gy then
+					-- up-stairs: no floor, no ceiling (stairwell opening)
+					render_stairs(x0, x1, z0, z1, y_lo, y_hi, dng.stairs_dir,
+						cam_x, cam_y, cam_z, ca, sa, uv_a, uv_b, uv_c, uv_d, false)
+				elseif dng.down_gx and gx == dng.down_gx and gy == dng.down_gy then
+					-- down-stairs: descending steps, with ceiling
+					render_stairs(x0, x1, z0, z1, y_lo, y_hi, dng.down_dir,
+						cam_x, cam_y, cam_z, ca, sa, uv_a, uv_b, uv_c, uv_d, true)
+					try_quad(x0,y_hi,z1, x1,y_hi,z1, x1,y_hi,z0, x0,y_hi,z0,
+						cam_x,cam_y,cam_z, ca,sa, uv_a,uv_b,uv_c,uv_d, 2)
+				else
+					-- normal floor
+					try_quad(x0,y_lo,z0, x1,y_lo,z0, x1,y_lo,z1, x0,y_lo,z1,
+						cam_x,cam_y,cam_z, ca,sa, uv_a,uv_b,uv_c,uv_d, 1)
+					-- ceiling
+					try_quad(x0,y_hi,z1, x1,y_hi,z1, x1,y_hi,z0, x0,y_hi,z0,
+						cam_x,cam_y,cam_z, ca,sa, uv_a,uv_b,uv_c,uv_d, 2)
+				end
 			end
 		end
 	end
 
 	-- pillars at grid intersections (wall corners bordering open space)
-	local pil_s = 16  -- 1 tile width for narrow pillar face
-	local pil_a = {0, 0}
-	local pil_b = {pil_s, 0}
-	local pil_c = {pil_s, s}
-	local pil_d = {0, s}
-
 	for vy = gy0, gy1 + 1 do
 		for vx = gx0, gx1 + 1 do
 			-- check 4 cells around this vertex: nw(vx-1,vy-1) ne(vx,vy-1) sw(vx-1,vy) se(vx,vy)
@@ -364,10 +523,11 @@ function DungeonView.draw(dng, player)
 
 	Renderer.flush_with_fog()
 
-	if DungeonView.half_res then
+	if rm > 0 then
+		local rw, rh = RES_MODES[rm][1], RES_MODES[rm][2]
 		set_draw_target()
 		cls(0)
 		Renderer.set_resolution(480, 270)
-		sspr(half_buf, 0, 0, HALF_W, HALF_H, 0, 0, 480, 270)
+		sspr(res_bufs[rm], 0, 0, rw, rh, 0, 0, 480, 270)
 	end
 end

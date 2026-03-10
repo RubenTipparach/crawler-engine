@@ -71,49 +71,71 @@ function Renderer.flush(use_radix)
 	end
 end
 
--- flush with depth-based fog overlays via color table
--- fog planes at per-level depths, interleaved with scene tris (painter's algorithm)
--- each plane darkens everything drawn so far; cumulative for farther geometry
+-- flush geometry + fog using painter's algorithm (back-to-front).
+-- fog overlays are color-tinted rectangles at fixed depth thresholds.
+-- they are interleaved with sorted geometry so that:
+--   - far tris get painted BEFORE fog rects → fog darkens them
+--   - near tris get painted AFTER fog rects → they stay bright
+-- this creates depth-based fog without per-pixel depth testing.
 function Renderer.flush_with_fog()
 	local fog = Config.fog
-	local n = #fog.colors
-	local starts = fog.start
+	local n = #fog.colors       -- number of fog depth levels
+	local starts = fog.start    -- depth threshold per level (ascending)
+	local dither = fog.dither   -- "bayer", "floyd", or "none"
+	local textures = dither == "floyd" and fog.tex_floyd or fog.tex_bayer
 
+	-- sort all geometry back-to-front (descending depth)
 	if dl_n > 1 then
 		quicksort(draw_list, 1, dl_n)
 	end
 
-	local ct = get_spr(fog.spr)
+	local ct = get_spr(fog.spr) -- color table sprite for tinting
 	local fov = Renderer.fov
 	local cy = Renderer.cy
-	local sw = Renderer.cx * 2 - 1
-	local sh = Renderer.screen_h - 1
+	local sw = Renderer.cx * 2 - 1  -- screen width
+	local sh = Renderer.screen_h - 1 -- screen height
 
-	local fi = n  -- start from farthest fog plane
+	-- walk fog planes from farthest (n) to nearest (1).
+	-- fi tracks the next fog plane to insert.
+	local fi = n
 
+	-- main loop: draw each tri in back-to-front order.
+	-- before each tri, check if any fog planes sit between
+	-- the previous tri's depth and this tri's depth.
 	for i = 1, dl_n do
 		local d = draw_list[i].d
 
-		-- insert fog overlays for thresholds we've passed
+		-- draw any fog planes that are farther than this tri.
+		-- a fog rect at depth starts[fi] darkens everything
+		-- already drawn (which is all farther geometry).
 		while fi >= 1 and d < starts[fi] do
+			-- rect height = fov / depth (perspective projection)
 			local ht = fov / starts[fi]
 			local top = mid(0, cy - ht, sh)
 			local bot = mid(0, cy + ht, sh)
 
-			memmap(0x8000, ct)
-			poke(0x550b, 0x3f)
-			rectfill(0, top, sw, bot, fog.colors[fi])
+			memmap(0x8000, ct)    -- map color table to draw palette
+			poke(0x550b, 0x3f)   -- enable color remapping
+			if dither ~= "none" and textures then
+				palt(0, true)
+				sspr(textures[fi], 0, top, sw + 1, bot - top + 1, 0, top, sw + 1, bot - top + 1)
+				palt(0, false)
+			else
+				rectfill(0, top, sw, bot, fog.colors[fi])
+			end
 			unmap(ct)
-			poke(0x550b, 0x00)
+			poke(0x550b, 0x00)   -- disable color remapping
 
 			fi -= 1
 		end
 
+		-- draw the tri (on top of any fog rects just placed)
 		Renderer.textri(draw_list[i].spr, draw_list[i])
 		Renderer.tri_count += 1
 	end
 
-	-- apply remaining fog overlays
+	-- any fog planes nearer than ALL geometry still need drawing.
+	-- (rare: only if fog thresholds are closer than the nearest tri)
 	while fi >= 1 do
 		local ht = fov / starts[fi]
 		local top = mid(0, cy - ht, sh)
@@ -121,7 +143,13 @@ function Renderer.flush_with_fog()
 
 		memmap(0x8000, ct)
 		poke(0x550b, 0x3f)
-		rectfill(0, top, sw, bot, fog.colors[fi])
+		if dither ~= "none" and textures then
+			palt(0, true)
+			sspr(textures[fi], 0, top, sw + 1, bot - top + 1, 0, top, sw + 1, bot - top + 1)
+			palt(0, false)
+		else
+			rectfill(0, top, sw, bot, fog.colors[fi])
+		end
 		unmap(ct)
 		poke(0x550b, 0x00)
 
