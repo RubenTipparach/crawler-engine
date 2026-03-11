@@ -15,6 +15,11 @@ Renderer.fog_enabled = true
 local scanlines = userdata("f64", 11, 270)
 local vpool = userdata("f64", 6, 3)
 
+-- pre-allocated vec buffers for textri (zero per-call allocations)
+local _v1 = vec(0,0,0,0,0,0,0,0,0,0,0)
+local _v2 = vec(0,0,0,0,0,0,0,0,0,0,0)
+local _v3 = vec(0,0,0,0,0,0,0,0,0,0,0)
+
 -- draw list
 local draw_list = {}
 local dl_n = 0
@@ -227,21 +232,25 @@ function Renderer.textri(spr_idx, e)
 
 	if y3 == y1 then return end
 
-	local uv_top = vec(vpool[4],vpool[5])*w1
-	local uv_bot = vec(vpool[16],vpool[17])*w3
+	-- UV interpolation (scalar, no vec allocation)
+	local ut = vpool[4] * w1
+	local vt = vpool[5] * w1
+	local ub = vpool[16] * w3
+	local vb = vpool[17] * w3
 
 	local t = (y2-y1)/(y3-y1)
-	local uvd = (uv_bot-uv_top)*t+uv_top
+	local ud = (ub-ut)*t+ut
+	local vd = (vb-vt)*t+vt
 
-	local v1 = vec(spr_idx,x1,y1,x1,y1, uv_top.x,uv_top.y, uv_top.x,uv_top.y, w1,w1)
-	local v2 = vec(
-		spr_idx,
-		vpool[6],y2,
-		(x3-x1)*t+x1, y2,
-		vpool[10]*w2, vpool[11]*w2,
-		uvd.x, uvd.y,
-		w2, (w3-w1)*t+w1
-	)
+	-- fill v1 in-place: {spr, xl, yl, xr, yr, ul, vl, ur, vr, wl, wr}
+	_v1[0],_v1[1],_v1[2],_v1[3],_v1[4] = spr_idx, x1, y1, x1, y1
+	_v1[5],_v1[6],_v1[7],_v1[8],_v1[9],_v1[10] = ut, vt, ut, vt, w1, w1
+
+	-- fill v2 in-place
+	local mx = (x3-x1)*t+x1
+	_v2[0],_v2[1],_v2[2],_v2[3],_v2[4] = spr_idx, vpool[6], y2, mx, y2
+	_v2[5],_v2[6],_v2[7],_v2[8] = vpool[10]*w2, vpool[11]*w2, ud, vd
+	_v2[9],_v2[10] = w2, (w3-w1)*t+w1
 
 	local y_max = Renderer.screen_h - 1
 	local start_y = y1 < -1 and -1 or y1\1
@@ -250,17 +259,20 @@ function Renderer.textri(spr_idx, e)
 
 	local dy = mid_y - start_y
 	if dy > 0 then
-		local slope = (v2-v1):div(y2-y1)
-		scanlines:copy(slope*(start_y+1-y1)+v1, true, 0,0,11)
+		local slope = (_v2-_v1):div(y2-y1)
+		scanlines:copy(slope*(start_y+1-y1)+_v1, true, 0,0,11)
 			:copy(slope, true, 0,11,11, 0,11,dy-1)
 		tline3d(scanlines:add(scanlines, true, 0,11,11, 11,11,dy-1), 0, dy)
 	end
 
-	local v3 = vec(spr_idx,x3,y3,x3,y3, uv_bot.x,uv_bot.y, uv_bot.x,uv_bot.y, w3,w3)
+	-- fill v3 in-place
+	_v3[0],_v3[1],_v3[2],_v3[3],_v3[4] = spr_idx, x3, y3, x3, y3
+	_v3[5],_v3[6],_v3[7],_v3[8],_v3[9],_v3[10] = ub, vb, ub, vb, w3, w3
+
 	dy = stop_y - mid_y
 	if dy > 0 then
-		local slope = (v3-v2):div(y3-y2)
-		scanlines:copy(slope*(mid_y+1-y2)+v2, true, 0,0,11)
+		local slope = (_v3-_v2):div(y3-y2)
+		scanlines:copy(slope*(mid_y+1-y2)+_v2, true, 0,0,11)
 			:copy(slope, true, 0,11,11, 0,11,dy-1)
 		tline3d(scanlines:add(scanlines, true, 0,11,11, 11,11,dy-1), 0, dy)
 	end
